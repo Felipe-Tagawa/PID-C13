@@ -18,7 +18,6 @@ class TabLogin(QWidget):
         main_layout = QVBoxLayout(self)
         main_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        # Card de Login centralizado
         card_login = QGroupBox("Acesso ao Sistema")
         card_login.setFixedWidth(350)
         card_layout = QVBoxLayout(card_login)

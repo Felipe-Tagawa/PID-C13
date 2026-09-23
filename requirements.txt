@@ -3,3 +3,5 @@ PySide6
 matplotlib
 numpy
 pandas
+pyqtgraph
+scipy
