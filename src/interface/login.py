@@ -1,7 +1,7 @@
 import streamlit as st
 
 
-def render_login(tab):
+def mostrar_login(tab):
     # Aba de login e controle de acesso
     with tab:
         st.subheader("Acesso ao Sistema")
