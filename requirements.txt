@@ -1,5 +1,6 @@
-control
-PySide6
+streamlit
 matplotlib
 numpy
 pandas
+scipy
+control
