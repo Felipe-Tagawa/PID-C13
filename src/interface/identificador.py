@@ -171,6 +171,9 @@ def mostrar_identificacao(tab):
                 **res,
                 "setpoint": float(y[-1]),
                 "sistema": final_system,
+                "t": t,
+                "y": y,
+                "du": du,
             }
 
         with col_graf:
