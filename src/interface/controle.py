@@ -40,38 +40,46 @@ def calcular_sintonia(metodo, tipo_controlador, k, tau, theta):
     return float(kp), float(ti), float(td)
 
 
-def simular_malhas(k, tau, theta, kp, ti, td, sp=1.0, t_max=600.0, n_pts=1200):
-    """Simula a resposta ao degrau em Malha Aberta (exata) e em Malha Fechada (com Padé 1a ordem)."""
-    t = np.linspace(0, t_max, n_pts)
+def simular_malhas(k, tau, theta, kp, ti, td, sp=1.0, t_max=600.0, dt=0.2):
+    """Simula a resposta ao degrau em Malha Aberta (exata) e em Malha Fechada (com atraso puro exato)."""
+    t = np.arange(0, t_max + dt, dt)
+    n = len(t)
+    delay_steps = int(round(max(theta, 0.0) / dt))
 
     # Malha Aberta: resposta analítica exata ao degrau u(t) = sp * 1(t) com atraso puro theta
     y_ma = np.zeros_like(t)
     mask = t >= theta
     y_ma[mask] = sp * k * (1.0 - np.exp(-(t[mask] - theta) / max(tau, 1e-4)))
 
-    # Malha Fechada: aproximação de Padé de 1a ordem para atraso em malha fechada
-    sys_plant = ctrl.tf(k, [max(tau, 1e-4), 1])
-    if theta > 0:
-        num_p, den_p = ctrl.pade(theta, 1)
-        sys_fopdt = ctrl.series(sys_plant, ctrl.tf(num_p, den_p))
-    else:
-        sys_fopdt = sys_plant
+    # Malha Fechada: simulação precisa com atraso de transporte puro (DDE) e filtro derivativo N=10
+    y_mf = np.zeros(n)
+    u = np.zeros(n)
+    integral = 0.0
+    e_prev = 0.0
+    d_state = 0.0
+    n_filter = 10.0
 
-    s = ctrl.tf("s")
-    n_filter = 10.0  # filtro derivativo industrial para estabilidade numérica
-    if td > 0:
-        c_tf = kp * (1.0 + 1.0 / (max(ti, 1e-4) * s) + (td * s) / (1.0 + (td / n_filter) * s))
-    else:
-        c_tf = kp * (1.0 + 1.0 / (max(ti, 1e-4) * s))
+    ti_safe = max(ti, 1e-4)
+    td_safe = max(td, 0.0)
+    tau_safe = max(tau, 1e-4)
 
-    loop_open = ctrl.series(c_tf, sys_fopdt)
-    g_cl = ctrl.feedback(loop_open, 1.0)
+    for i in range(n - 1):
+        err = sp - y_mf[i]
+        integral += err * dt
 
-    _, y_mf_step = ctrl.step_response(g_cl, T=t)
-    y_mf = y_mf_step * sp
+        # Ação derivativa filtrada
+        de = (err - e_prev) / dt if i > 0 else 0.0
+        if td_safe > 0:
+            d_state += dt * (n_filter / td_safe) * (td_safe * de - d_state)
+        else:
+            d_state = 0.0
 
-    # Antes do tempo morto físico theta, a saída do forno não reage
-    y_mf = np.where(t < theta, 0.0, y_mf)
+        u[i] = kp * (err + (1.0 / ti_safe) * integral + d_state)
+        e_prev = err
+
+        u_delayed = u[i - delay_steps] if i >= delay_steps else 0.0
+        dy = (k * u_delayed - y_mf[i]) / tau_safe
+        y_mf[i + 1] = y_mf[i] + dy * dt
 
     return t, y_ma, y_mf
 
@@ -225,14 +233,44 @@ def mostrar_controle(tab):
         )
         nome_curto_outro = "Ziegler-Nichols" if "ITAE" in metodo_sel else "ITAE"
 
-        # Cálculo da sintonia escolhida
-        kp_calc, ti_calc, td_calc = calcular_sintonia(
-            metodo_sel, tipo_ctrl, k_val, tau_val, theta_val
+        # Simulação simultânea de ambos os métodos para consistência total da tabela
+        kp_itae, ti_itae, td_itae = calcular_sintonia(
+            "ITAE (Menor Overshoot)", tipo_ctrl, k_val, tau_val, theta_val
         )
+        kp_zn, ti_zn, td_zn = calcular_sintonia(
+            "Ziegler-Nichols (Curva de Reação)", tipo_ctrl, k_val, tau_val, theta_val
+        )
+
+        t_max_sim = float(max(500.0, 4.0 * tau_val + 2.0 * theta_val))
+        t_sim, y_ma, y_mf_itae = simular_malhas(
+            k_val, tau_val, theta_val, kp_itae, ti_itae, td_itae, sp=sp_val, t_max=t_max_sim
+        )
+        _, _, y_mf_zn = simular_malhas(
+            k_val, tau_val, theta_val, kp_zn, ti_zn, td_zn, sp=sp_val, t_max=t_max_sim
+        )
+
+        m_ma = calcular_metricas(t_sim, y_ma, sp=sp_val)
+        m_itae = calcular_metricas(t_sim, y_mf_itae, sp=sp_val)
+        m_zn = calcular_metricas(t_sim, y_mf_zn, sp=sp_val)
+
+        # Dados do método selecionado
+        if "ITAE" in metodo_sel:
+            kp_calc, ti_calc, td_calc = kp_itae, ti_itae, td_itae
+            y_mf_sel = y_mf_itae
+            m_mf = m_itae
+            y_mf_outro = y_mf_zn
+            m_mf_outro = m_zn
+        else:
+            kp_calc, ti_calc, td_calc = kp_zn, ti_zn, td_zn
+            y_mf_sel = y_mf_zn
+            m_mf = m_zn
+            y_mf_outro = y_mf_itae
+            m_mf_outro = m_itae
+
         ki_calc = kp_calc / ti_calc if ti_calc > 0 else 0.0
         kd_calc = kp_calc * td_calc
 
-        # Opção para comparar simultaneamente os dois métodos
+        # Opção para comparar simultaneamente os dois métodos no gráfico
         comparar_ambos = st.checkbox(
             "Exibir ambos os métodos (ITAE vs. Ziegler-Nichols) no gráfico para contrastar o sobressinal (overshoot)",
             value=True,
@@ -251,27 +289,6 @@ def mostrar_controle(tab):
             "Método Selecionado",
             f"{nome_curto_sel} ({tipo_ctrl})",
         )
-
-        # Simulação temporal
-        t_max_sim = float(max(500.0, 4.0 * tau_val + 2.0 * theta_val))
-        t_sim, y_ma, y_mf = simular_malhas(
-            k_val, tau_val, theta_val, kp_calc, ti_calc, td_calc, sp=sp_val, t_max=t_max_sim
-        )
-
-        m_ma = calcular_metricas(t_sim, y_ma, sp=sp_val)
-        m_mf = calcular_metricas(t_sim, y_mf, sp=sp_val)
-
-        # Caso deseje comparar com o outro método no plot
-        y_mf_outro = None
-        m_mf_outro = None
-        if comparar_ambos:
-            kp_o, ti_o, td_o = calcular_sintonia(
-                outro_metodo_nome, tipo_ctrl, k_val, tau_val, theta_val
-            )
-            _, _, y_mf_outro = simular_malhas(
-                k_val, tau_val, theta_val, kp_o, ti_o, td_o, sp=sp_val, t_max=t_max_sim
-            )
-            m_mf_outro = calcular_metricas(t_sim, y_mf_outro, sp=sp_val)
 
         # ======================================================================
         # GRÁFICO COMPARATIVO: MALHA ABERTA VS MALHA FECHADA
@@ -311,7 +328,7 @@ def mostrar_controle(tab):
         cor_mf = "#28a745" if "ITAE" in metodo_sel else "#d62728"
         ax.plot(
             t_sim,
-            y_mf,
+            y_mf_sel,
             color=cor_mf,
             linestyle="-",
             linewidth=2.4,
@@ -319,7 +336,7 @@ def mostrar_controle(tab):
         )
 
         # Curva comparativa do outro método, se ativada
-        if comparar_ambos and y_mf_outro is not None:
+        if comparar_ambos:
             cor_outro = "#d62728" if "ITAE" in metodo_sel else "#28a745"
             ax.plot(
                 t_sim,
@@ -398,7 +415,7 @@ def mostrar_controle(tab):
             help="Percentual máximo em que a resposta ultrapassa o valor em regime.",
         )
 
-        # Tabela comparativa detalhada
+        # Tabela comparativa detalhada (sempre completa para ambos os métodos!)
         dados_tabela = {
             "Métrica de Desempenho": [
                 "Tempo de Subida (tr [10% - 90%])",
@@ -416,25 +433,23 @@ def mostrar_controle(tab):
                 f"{m_ma['overshoot']:.2f} %",
                 f"{m_ma['y_final']:.4f}",
             ],
-            f"Malha Fechada: {nome_curto_sel} ({tipo_ctrl})": [
-                f"{m_mf['tr']:.2f} s",
-                f"{m_mf['ts']:.2f} s",
-                f"{m_mf['ess']:.4f}",
-                f"{m_mf['ess_pct']:.2f} %",
-                f"{m_mf['overshoot']:.2f} %",
-                f"{m_mf['y_final']:.4f}",
+            f"Malha Fechada: ITAE ({tipo_ctrl})": [
+                f"{m_itae['tr']:.2f} s",
+                f"{m_itae['ts']:.2f} s",
+                f"{m_itae['ess']:.4f}",
+                f"{m_itae['ess_pct']:.2f} %",
+                f"{m_itae['overshoot']:.2f} %",
+                f"{m_itae['y_final']:.4f}",
+            ],
+            f"Malha Fechada: Ziegler-Nichols ({tipo_ctrl})": [
+                f"{m_zn['tr']:.2f} s",
+                f"{m_zn['ts']:.2f} s",
+                f"{m_zn['ess']:.4f}",
+                f"{m_zn['ess_pct']:.2f} %",
+                f"{m_zn['overshoot']:.2f} %",
+                f"{m_zn['y_final']:.4f}",
             ],
         }
-
-        if comparar_ambos and m_mf_outro is not None:
-            dados_tabela[f"Malha Fechada: {nome_curto_outro} ({tipo_ctrl})"] = [
-                f"{m_mf_outro['tr']:.2f} s",
-                f"{m_mf_outro['ts']:.2f} s",
-                f"{m_mf_outro['ess']:.4f}",
-                f"{m_mf_outro['ess_pct']:.2f} %",
-                f"{m_mf_outro['overshoot']:.2f} %",
-                f"{m_mf_outro['y_final']:.4f}",
-            ]
 
         st.dataframe(pd.DataFrame(dados_tabela), width="stretch", hide_index=True)
 
@@ -495,11 +510,11 @@ def mostrar_controle(tab):
             )
 
         with aba_metodos:
-            mp_itae = m_mf["overshoot"] if "ITAE" in metodo_sel else (m_mf_outro["overshoot"] if m_mf_outro else 0.0)
-            mp_zn = m_mf["overshoot"] if "Ziegler" in metodo_sel else (m_mf_outro["overshoot"] if m_mf_outro else 18.2)
+            mp_itae = m_itae["overshoot"]
+            mp_zn = m_zn["overshoot"]
 
             st.success(
-                f"🏆 **Método com Menor Sobressinal: ITAE ({mp_itae:.2f}% de Overshoot vs. {mp_zn:.2f}% do Ziegler-Nichols)**"
+                f"**Método com Menor Sobressinal: ITAE ({mp_itae:.2f}% de Overshoot vs. {mp_zn:.2f}% do Ziegler-Nichols)**"
             )
 
             st.markdown(
