@@ -295,7 +295,7 @@ def mostrar_ajuste(tab):
                 "Restaurar valores identificados",
                 key=f"{chave}_restaurar",
                 on_click=restaurar_parametros,
-                use_container_width=True
+                width='stretch'
             )
 
             st.markdown(
@@ -305,7 +305,7 @@ def mostrar_ajuste(tab):
             if st.button(
                 "Calcular ajuste automático",
                 key=f"{chave}_automatico",
-                use_container_width=True
+                width='stretch'
             ):
 
                 ka, taua, thetaa = ajustar_automatico(t, y, du, k0, tau0, theta0)
@@ -334,7 +334,7 @@ def mostrar_ajuste(tab):
                     "Aplicar ajuste automático",
                     key=f"{chave}_aplicar_auto",
                     on_click=aplicar_automatico,
-                    use_container_width=True
+                    width='stretch'
                 )
 
         k = float(st.session_state[chave_k])
@@ -417,7 +417,7 @@ def mostrar_ajuste(tab):
 
             st.pyplot(
                 fig,
-                use_container_width=True
+                width='stretch'
             )
 
             g1, g2, g3 = st.columns(3)
@@ -497,7 +497,7 @@ def mostrar_ajuste(tab):
             fig_erro.tight_layout()
             st.pyplot(
                 fig_erro,
-                use_container_width=True
+                width='stretch'
             )
 
             buffer_erro = io.BytesIO()
@@ -549,7 +549,7 @@ def mostrar_ajuste(tab):
         st.dataframe(
             tabela.round(4),
             hide_index=True,
-            use_container_width=True
+            width='stretch'
         )
 
         st.markdown(

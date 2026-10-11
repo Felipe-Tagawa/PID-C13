@@ -290,9 +290,7 @@ def mostrar_controle(tab):
             f"{nome_curto_sel} ({tipo_ctrl})",
         )
 
-        # ======================================================================
-        # GRÁFICO COMPARATIVO: MALHA ABERTA VS MALHA FECHADA
-        # ======================================================================
+        # Gráfico Comparativo: MALHA ABERTA VS MALHA FECHADA
         fig, ax = plt.subplots(figsize=(10, 4.5), dpi=100)
 
         # Degrau de referência (Setpoint)
@@ -374,9 +372,7 @@ def mostrar_controle(tab):
 
         st.pyplot(fig)
 
-        # ======================================================================
-        # TABELA E CARTÕES DE MÉTRICAS COMPARATIVAS
-        # ======================================================================
+        # Tabela e cartões de métricas comparativas
         st.markdown("### Métricas de Desempenho")
 
         c_m1, c_m2, c_m3, c_m4 = st.columns(4)
@@ -453,9 +449,7 @@ def mostrar_controle(tab):
 
         st.dataframe(pd.DataFrame(dados_tabela), width="stretch", hide_index=True)
 
-        # ======================================================================
-        # COMENTÁRIOS E ANÁLISE COMPARATIVA DAS DIFERENÇAS
-        # ======================================================================
+        # Comentários e análise comparativa das diferenças
         st.markdown("### Análise Comparativa e Fundamentação Teórica")
 
         aba_subida, aba_acomod, aba_erro, aba_metodos = st.tabs([
