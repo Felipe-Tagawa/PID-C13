@@ -4,6 +4,7 @@ from src.interface.login import mostrar_login
 from src.interface.identificador import mostrar_identificacao
 from src.interface.dados import mostrar_dados
 from src.interface.controle import mostrar_controle
+from src.interface.ajuste import mostrar_ajuste
 
 st.set_page_config(page_title="Identificação & Controle PID", layout="wide")
 
@@ -16,12 +17,13 @@ if "aba_alvo" not in st.session_state:
     st.session_state.aba_alvo = None
 
 # Abas da aplicação
-tab_login, tab_ident, tab_dados, tab_pid = st.tabs(["Início", "Identificação", "Dados", "Controle PID"])
+tab_login, tab_ident, tab_dados, tab_pid, tab_ajuste = st.tabs(["Início", "Identificação", "Dados", "Controle PID", "Ajuste"])
 
 mostrar_login(tab_login)
 mostrar_identificacao(tab_ident)
 mostrar_dados(tab_dados)
 mostrar_controle(tab_pid)
+mostrar_ajuste(tab_ajuste)
 
 # Permite rodar com python src/main.py
 if __name__ == "__main__" and not st.runtime.exists():
