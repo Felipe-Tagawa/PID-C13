@@ -1,3 +1,4 @@
+import io
 import os
 import streamlit as st
 import numpy as np
@@ -35,7 +36,10 @@ def calcular_sintonia(metodo, tipo_controlador, k, tau, theta):
             ti = tau_safe / max(1e-4, (0.796 - 0.147 * r))
             td = 0.308 * tau_safe * (r ** 0.929)
     else:
-        raise ValueError(f"Método '{metodo}' não reconhecido.")
+        # Fallback Ziegler-Nichols
+        kp = 1.2 * tau_safe / (k_safe * theta_safe)
+        ti = 2.0 * theta_safe
+        td = 0.5 * theta_safe
 
     return float(kp), float(ti), float(td)
 
@@ -59,9 +63,9 @@ def simular_malhas(k, tau, theta, kp, ti, td, sp=1.0, t_max=600.0, dt=0.2):
     d_state = 0.0
     n_filter = 10.0
 
-    ti_safe = max(ti, 1e-4)
-    td_safe = max(td, 0.0)
-    tau_safe = max(tau, 1e-4)
+    ti_safe = max(float(ti), 1e-4)
+    td_safe = max(float(td), 0.0)
+    tau_safe = max(float(tau), 1e-4)
 
     for i in range(n - 1):
         err = sp - y_mf[i]
@@ -102,9 +106,9 @@ def calcular_metricas(t, y, sp=1.0, tol=0.02):
     else:
         tr = 0.0
 
-    # Tempo de acomodação (critério de 2% em relação ao patamar final)
+    # Tempo de acomodação (critério de 2% em relação ao patamar final / setpoint)
     banda = tol * abs(dy if abs(dy) > 1e-6 else sp)
-    fora_da_banda = np.where(np.abs(y - y_final) > banda)[0]
+    fora_da_banda = np.where(np.abs(y - sp) > banda)[0]
     if len(fora_da_banda) == 0:
         ts = float(t[0])
     elif fora_da_banda[-1] < len(t) - 1:
@@ -118,7 +122,9 @@ def calcular_metricas(t, y, sp=1.0, tol=0.02):
 
     # Sobressinal (Overshoot)
     pico = float(np.max(y))
-    if abs(dy) > 1e-6 and pico > y_final:
+    if abs(dy) > 1e-6 and pico > sp:
+        overshoot = float(((pico - sp) / abs(sp)) * 100.0)
+    elif abs(dy) > 1e-6 and pico > y_final:
         overshoot = float(((pico - y_final) / abs(dy)) * 100.0)
     else:
         overshoot = 0.0
@@ -158,9 +164,9 @@ def carregar_modelo_exemplo():
 
 
 def mostrar_controle(tab):
-    """Renderiza a aba de Controle PID com plot de Malha Aberta vs Fechada e comentários comparativos."""
+    """Renderiza a aba de Controle PID com sintonia (Manual e Método), análise completa e fundamentos."""
     with tab:
-        st.subheader("Controle em Malha Aberta vs. Malha Fechada")
+        st.subheader("Controle em Malha Aberta vs. Malha Fechada (PID)")
 
         if not st.session_state.logado:
             st.warning("Faça o login na aba 'Início' para acessar os recursos de controle.")
@@ -182,6 +188,8 @@ def mostrar_controle(tab):
         k_val = float(m["k"])
         tau_val = float(m["tau"])
         theta_val = float(m["theta"])
+        sp_padrao = float(m.get("setpoint", 1.0))
+        sp_padrao = sp_padrao if sp_padrao > 0 else 1.0
 
         # Barra com parâmetros identificados da planta
         with st.expander("Parâmetros do Modelo Identificado (FOPDT)", expanded=False):
@@ -194,55 +202,122 @@ def mostrar_controle(tab):
                 rf"G(s) = \frac{{{k_val:.4f}}}{{{tau_val:.2f}s + 1}} \, e^{{-{theta_val:.2f}s}}"
             )
 
-        # Painel de controle: sintonia e simulação
-        col_cfg1, col_cfg2, col_cfg3 = st.columns(3)
-
-        with col_cfg1:
-            metodo_sel = st.selectbox(
-                "Método de Sintonia",
-                ["ITAE (Menor Overshoot)", "Ziegler-Nichols (Curva de Reação)"],
-                index=0,
-                help="ITAE é otimizado para seguimento de referência com mínimo sobressinal. Ziegler-Nichols utiliza as fórmulas clássicas baseadas na curva de reação ao degrau.",
-            )
-
-        with col_cfg2:
-            tipo_ctrl = st.radio(
-                "Tipo de Controlador",
-                ["PID", "PI"],
+        # Seleção da forma de sintonia: Método ou Manual
+        col_modo, _ = st.columns([2.5, 1])
+        with col_modo:
+            modo_sintonia = st.radio(
+                "Seleção de Sintonia:",
+                ["Método", "Manual"],
                 index=0,
                 horizontal=True,
-                help="PID inclui ação derivativa com filtro N=10; PI inclui apenas ações proporcional e integral.",
+                help="Escolha entre calcular os ganhos automaticamente pelos métodos analíticos (ITAE / Ziegler-Nichols) ou ajustar manualmente Kp, Ti e Td.",
             )
 
-        with col_cfg3:
-            sp_val = st.number_input(
-                "Degrau de Setpoint (r)",
-                min_value=0.1,
-                max_value=200.0,
-                value=1.0,
-                step=0.5,
-                help="Amplitude do degrau de referência aplicado ao sistema.",
-            )
-
-        # Rótulos amigáveis para evitar contradições entre malha e sintonia
-        nome_curto_sel = "ITAE" if "ITAE" in metodo_sel else "Ziegler-Nichols"
-        outro_metodo_nome = (
-            "Ziegler-Nichols (Curva de Reação)"
-            if "ITAE" in metodo_sel
-            else "ITAE (Menor Overshoot)"
+        # Sintonias analíticas de referência (sem Cohen-Coon)
+        kp_itae_ref, ti_itae_ref, td_itae_ref = calcular_sintonia(
+            "ITAE (Menor Overshoot)", "PID", k_val, tau_val, theta_val
         )
-        nome_curto_outro = "Ziegler-Nichols" if "ITAE" in metodo_sel else "ITAE"
-
-        # Simulação simultânea de ambos os métodos para consistência total da tabela
-        kp_itae, ti_itae, td_itae = calcular_sintonia(
-            "ITAE (Menor Overshoot)", tipo_ctrl, k_val, tau_val, theta_val
-        )
-        kp_zn, ti_zn, td_zn = calcular_sintonia(
-            "Ziegler-Nichols (Curva de Reação)", tipo_ctrl, k_val, tau_val, theta_val
+        kp_zn_ref, ti_zn_ref, td_zn_ref = calcular_sintonia(
+            "Ziegler-Nichols (Curva de Reação)", "PID", k_val, tau_val, theta_val
         )
 
+        if modo_sintonia == "Método":
+            col_cfg1, col_cfg2, col_cfg3 = st.columns(3)
+            with col_cfg1:
+                metodo_sel = st.selectbox(
+                    "Método de Sintonia",
+                    ["ITAE (Menor Overshoot)", "Ziegler-Nichols (Curva de Reação)"],
+                    index=0,
+                    help="ITAE é otimizado para seguimento de referência com mínimo sobressinal. Ziegler-Nichols utiliza as fórmulas clássicas baseadas na curva de reação.",
+                )
+            with col_cfg2:
+                tipo_ctrl = st.radio(
+                    "Tipo de Controlador",
+                    ["PID", "PI"],
+                    index=0,
+                    horizontal=True,
+                    help="PID inclui ação derivativa; PI inclui apenas proporcional e integral.",
+                )
+            with col_cfg3:
+                sp_val = st.number_input(
+                    "Degrau de Setpoint (SP)",
+                    min_value=0.1,
+                    max_value=200.0,
+                    value=float(st.session_state.get("ctrl_sp", sp_padrao)),
+                    step=0.5,
+                    help="Amplitude da referência desejada.",
+                )
+                st.session_state["ctrl_sp"] = sp_val
+
+            kp_itae, ti_itae, td_itae = calcular_sintonia("ITAE (Menor Overshoot)", tipo_ctrl, k_val, tau_val, theta_val)
+            kp_zn, ti_zn, td_zn = calcular_sintonia("Ziegler-Nichols (Curva de Reação)", tipo_ctrl, k_val, tau_val, theta_val)
+
+            if "ITAE" in metodo_sel:
+                kp_calc, ti_calc, td_calc = kp_itae, ti_itae, td_itae
+                nome_curto_sel = "ITAE"
+                outro_nome = "Ziegler-Nichols"
+            else:
+                kp_calc, ti_calc, td_calc = kp_zn, ti_zn, td_zn
+                nome_curto_sel = "Ziegler-Nichols"
+                outro_nome = "ITAE"
+
+        else:  # Modo Manual
+            st.write("**Ajuste Manual dos Parâmetros do Controlador:**")
+            col_m1, col_m2, col_m3, col_m4 = st.columns(4)
+
+            with col_m1:
+                kp_calc = st.number_input(
+                    "Kp:",
+                    value=float(st.session_state.get("ctrl_manual_kp", kp_zn_ref)),
+                    step=0.01,
+                    format="%.4f",
+                    help="Ganho proporcional do controlador.",
+                )
+                st.session_state["ctrl_manual_kp"] = kp_calc
+
+            with col_m2:
+                ti_calc = st.number_input(
+                    "Ti (s):",
+                    value=float(st.session_state.get("ctrl_manual_ti", ti_zn_ref)),
+                    step=0.5,
+                    format="%.2f",
+                    help="Tempo integral em segundos.",
+                )
+                st.session_state["ctrl_manual_ti"] = ti_calc
+
+            with col_m3:
+                td_calc = st.number_input(
+                    "Td (s):",
+                    value=float(st.session_state.get("ctrl_manual_td", td_zn_ref)),
+                    step=0.05,
+                    format="%.2f",
+                    help="Tempo derivativo em segundos.",
+                )
+                st.session_state["ctrl_manual_td"] = td_calc
+
+            with col_m4:
+                sp_val = st.number_input(
+                    "Degrau de Setpoint (SP)",
+                    min_value=0.1,
+                    max_value=200.0,
+                    value=float(st.session_state.get("ctrl_sp", sp_padrao)),
+                    step=0.5,
+                )
+                st.session_state["ctrl_sp"] = sp_val
+
+            tipo_ctrl = "PID" if td_calc > 0 else "PI"
+            metodo_sel = "Manual"
+            nome_curto_sel = f"Manual (Kp={kp_calc:.2f}, Ti={ti_calc:.1f}, Td={td_calc:.2f})"
+            outro_nome = "ITAE"
+            kp_itae, ti_itae, td_itae = kp_itae_ref, ti_itae_ref, td_itae_ref
+            kp_zn, ti_zn, td_zn = kp_zn_ref, ti_zn_ref, td_zn_ref
+
+        # Simulação simultânea
         t_max_sim = float(max(500.0, 4.0 * tau_val + 2.0 * theta_val))
-        t_sim, y_ma, y_mf_itae = simular_malhas(
+        t_sim, y_ma, y_mf_sel = simular_malhas(
+            k_val, tau_val, theta_val, kp_calc, ti_calc, td_calc, sp=sp_val, t_max=t_max_sim
+        )
+        _, _, y_mf_itae = simular_malhas(
             k_val, tau_val, theta_val, kp_itae, ti_itae, td_itae, sp=sp_val, t_max=t_max_sim
         )
         _, _, y_mf_zn = simular_malhas(
@@ -250,50 +325,31 @@ def mostrar_controle(tab):
         )
 
         m_ma = calcular_metricas(t_sim, y_ma, sp=sp_val)
+        m_mf = calcular_metricas(t_sim, y_mf_sel, sp=sp_val)
         m_itae = calcular_metricas(t_sim, y_mf_itae, sp=sp_val)
         m_zn = calcular_metricas(t_sim, y_mf_zn, sp=sp_val)
 
-        # Dados do método selecionado
-        if "ITAE" in metodo_sel:
-            kp_calc, ti_calc, td_calc = kp_itae, ti_itae, td_itae
-            y_mf_sel = y_mf_itae
-            m_mf = m_itae
-            y_mf_outro = y_mf_zn
-            m_mf_outro = m_zn
-        else:
-            kp_calc, ti_calc, td_calc = kp_zn, ti_zn, td_zn
-            y_mf_sel = y_mf_zn
-            m_mf = m_zn
-            y_mf_outro = y_mf_itae
-            m_mf_outro = m_itae
-
-        ki_calc = kp_calc / ti_calc if ti_calc > 0 else 0.0
-        kd_calc = kp_calc * td_calc
-
-        # Opção para comparar simultaneamente os dois métodos no gráfico
-        comparar_ambos = st.checkbox(
-            "Exibir ambos os métodos (ITAE vs. Ziegler-Nichols) no gráfico para contrastar o sobressinal (overshoot)",
-            value=True,
-        )
-
-        # Detalhamento dos ganhos calculados
-        col_g1, col_g2, col_g3, col_g4 = st.columns(4)
+        # Detalhamento dos parâmetros ativos (incluindo lambda bloqueado em 0.0)
+        col_g1, col_g2, col_g3, col_g4, col_g5 = st.columns(5)
         col_g1.metric("Ganho Proporcional (Kp)", f"{kp_calc:.4f}")
-        col_g2.metric("Tempo Integral (Ti)", f"{ti_calc:.2f} s", help=f"Ki = {ki_calc:.4f} s⁻¹")
+        col_g2.metric("Tempo Integral (Ti)", f"{ti_calc:.2f} s")
         col_g3.metric(
             "Tempo Derivativo (Td)",
-            f"{td_calc:.2f} s" if tipo_ctrl == "PID" else "—",
-            help=f"Kd = {kd_calc:.4f} s" if tipo_ctrl == "PID" else "Inativo no PI",
+            f"{td_calc:.2f} s" if td_calc > 0 else "—",
         )
-        col_g4.metric(
-            "Método Selecionado",
-            f"{nome_curto_sel} ({tipo_ctrl})",
+        col_g4.metric("λ (IMC)", "0.0", help="Métodos IMC não utilizados (parâmetro bloqueado em 0.0).")
+        col_g5.metric("Modo Ativo", "Manual" if modo_sintonia == "Manual" else f"{nome_curto_sel} ({tipo_ctrl})")
+
+        # Opção para comparar simultaneamente os métodos no gráfico
+        comparar_ambos = st.checkbox(
+            "Exibir ambos os métodos de referência (ITAE vs. Ziegler-Nichols) no gráfico para contrastar o sobressinal",
+            value=True,
         )
 
         # Gráfico Comparativo: MALHA ABERTA VS MALHA FECHADA
         fig, ax = plt.subplots(figsize=(10, 4.5), dpi=100)
 
-        # Degrau de referência (Setpoint)
+        # Setpoint
         ax.axhline(
             sp_val,
             color="#222222",
@@ -302,7 +358,7 @@ def mostrar_controle(tab):
             label=f"Setpoint r(t) = {sp_val:.2f}",
         )
 
-        # Faixa de tolerância de 2% ao redor do Setpoint
+        # Faixa de tolerância de 2%
         ax.fill_between(
             t_sim,
             sp_val * 0.98,
@@ -318,35 +374,56 @@ def mostrar_controle(tab):
             y_ma,
             color="#1f77b4",
             linestyle="--",
-            linewidth=2.2,
-            label=f"Malha Aberta (y_MA | y_final={m_ma['y_final']:.3f})",
+            linewidth=2.0,
+            label=f"Malha Aberta (y_MA | y_final={m_ma['y_final']:.2f})",
         )
 
-        # Resposta em Malha Fechada principal
-        cor_mf = "#28a745" if "ITAE" in metodo_sel else "#d62728"
+        # Resposta em Malha Fechada selecionada / manual
+        cor_mf = "#28a745" if "ITAE" in nome_curto_sel else "#d62728"
         ax.plot(
             t_sim,
             y_mf_sel,
             color=cor_mf,
             linestyle="-",
             linewidth=2.4,
-            label=f"Malha Fechada: {nome_curto_sel} ({tipo_ctrl} | y_final={m_mf['y_final']:.3f})",
+            label=f"Malha Fechada: {nome_curto_sel} (Mp={m_mf['overshoot']:.1f}%)",
         )
 
-        # Curva comparativa do outro método, se ativada
+        # Curvas comparativas de referência, se ativado
         if comparar_ambos:
-            cor_outro = "#d62728" if "ITAE" in metodo_sel else "#28a745"
-            ax.plot(
-                t_sim,
-                y_mf_outro,
-                color=cor_outro,
-                linestyle="-.",
-                linewidth=1.8,
-                alpha=0.85,
-                label=f"Malha Fechada: {nome_curto_outro} ({tipo_ctrl} | Mp={m_mf_outro['overshoot']:.1f}%)",
-            )
+            if modo_sintonia == "Método":
+                y_outro = y_mf_zn if "ITAE" in metodo_sel else y_mf_itae
+                m_outro = m_zn if "ITAE" in metodo_sel else m_itae
+                cor_outro = "#d62728" if "ITAE" in metodo_sel else "#28a745"
+                ax.plot(
+                    t_sim,
+                    y_outro,
+                    color=cor_outro,
+                    linestyle="-.",
+                    linewidth=1.8,
+                    alpha=0.85,
+                    label=f"Malha Fechada: {outro_nome} (Mp={m_outro['overshoot']:.1f}%)",
+                )
+            else:
+                ax.plot(
+                    t_sim,
+                    y_mf_itae,
+                    color="#28a745",
+                    linestyle="-.",
+                    linewidth=1.5,
+                    alpha=0.75,
+                    label=f"Referência: ITAE PID (Mp={m_itae['overshoot']:.1f}%)",
+                )
+                ax.plot(
+                    t_sim,
+                    y_mf_zn,
+                    color="#d62728",
+                    linestyle=":",
+                    linewidth=1.5,
+                    alpha=0.75,
+                    label=f"Referência: Z-N PID (Mp={m_zn['overshoot']:.1f}%)",
+                )
 
-        # Linha vertical indicando o tempo morto theta
         if theta_val > 0:
             ax.axvline(
                 theta_val,
@@ -358,13 +435,13 @@ def mostrar_controle(tab):
             )
 
         ax.set_title(
-            f"Resposta Temporal ao Degrau: Malha Aberta vs. Malha Fechada ({tipo_ctrl})",
+            f"Resposta Temporal ao Degrau: Malha Aberta vs. Malha Fechada ({nome_curto_sel})",
             fontsize=12,
             fontweight="bold",
             pad=10,
         )
         ax.set_xlabel("Tempo (s)", fontsize=10)
-        ax.set_ylabel("Saída do Sistema / Temperatura", fontsize=10)
+        ax.set_ylabel("Amplitude / Saída do Sistema", fontsize=10)
         ax.grid(True, linestyle="--", alpha=0.55)
         ax.set_xlim(0, t_max_sim)
         ax.legend(loc="lower right", fontsize=8.5, framealpha=0.92)
@@ -372,9 +449,18 @@ def mostrar_controle(tab):
 
         st.pyplot(fig)
 
-        # Tabela e cartões de métricas comparativas
-        st.markdown("### Métricas de Desempenho")
+        # Botão para exportar o gráfico
+        buf = io.BytesIO()
+        fig.savefig(buf, format="png", dpi=300, bbox_inches="tight")
+        st.download_button(
+            "Exportar Gráfico",
+            data=buf.getvalue(),
+            file_name="controle_pid.png",
+            mime="image/png",
+        )
 
+        # Cartões de Métricas de Desempenho
+        st.markdown("### Métricas de Desempenho")
         c_m1, c_m2, c_m3, c_m4 = st.columns(4)
 
         delta_tr = ((m_mf["tr"] - m_ma["tr"]) / m_ma["tr"] * 100) if m_ma["tr"] > 0 else 0
@@ -392,7 +478,7 @@ def mostrar_controle(tab):
             value=f"{m_mf['ts']:.1f} s",
             delta=f"{delta_ts:.1f}% vs MA ({m_ma['ts']:.1f} s)",
             delta_color="inverse",
-            help="Tempo necessário para a resposta permanecer estritamente dentro da faixa de 2%.",
+            help="Tempo necessário para permanecer estritamente dentro de ±2% do Setpoint.",
         )
 
         c_m3.metric(
@@ -400,18 +486,18 @@ def mostrar_controle(tab):
             value=f"{m_mf['ess']:.4f} ({m_mf['ess_pct']:.2f}%)",
             delta=f"-{m_ma['ess_pct'] - m_mf['ess_pct']:.1f}% vs MA ({m_ma['ess']:.4f})",
             delta_color="inverse",
-            help="Diferença entre o Setpoint desejado e o valor final estabilizado do sistema.",
+            help="Diferença entre o Setpoint e o valor final estabilizado.",
         )
 
         c_m4.metric(
             label="Sobressinal (Overshoot Mp)",
             value=f"{m_mf['overshoot']:.2f}%",
-            delta=f"Pico: {m_mf['pico']:.3f}",
+            delta=f"Pico: {m_mf['pico']:.2f}",
             delta_color="off",
-            help="Percentual máximo em que a resposta ultrapassa o valor em regime.",
+            help="Percentual máximo em que a resposta ultrapassa o Setpoint.",
         )
 
-        # Tabela comparativa detalhada (sempre completa para ambos os métodos!)
+        # Tabela comparativa detalhada
         dados_tabela = {
             "Métrica de Desempenho": [
                 "Tempo de Subida (tr [10% - 90%])",
@@ -429,7 +515,15 @@ def mostrar_controle(tab):
                 f"{m_ma['overshoot']:.2f} %",
                 f"{m_ma['y_final']:.4f}",
             ],
-            f"Malha Fechada: ITAE ({tipo_ctrl})": [
+            f"Malha Fechada: Ativa ({nome_curto_sel})": [
+                f"{m_mf['tr']:.2f} s",
+                f"{m_mf['ts']:.2f} s",
+                f"{m_mf['ess']:.4f}",
+                f"{m_mf['ess_pct']:.2f} %",
+                f"{m_mf['overshoot']:.2f} %",
+                f"{m_mf['y_final']:.4f}",
+            ],
+            "Malha Fechada: ITAE (PID)": [
                 f"{m_itae['tr']:.2f} s",
                 f"{m_itae['ts']:.2f} s",
                 f"{m_itae['ess']:.4f}",
@@ -437,7 +531,7 @@ def mostrar_controle(tab):
                 f"{m_itae['overshoot']:.2f} %",
                 f"{m_itae['y_final']:.4f}",
             ],
-            f"Malha Fechada: Ziegler-Nichols ({tipo_ctrl})": [
+            "Malha Fechada: Ziegler-Nichols (PID)": [
                 f"{m_zn['tr']:.2f} s",
                 f"{m_zn['ts']:.2f} s",
                 f"{m_zn['ess']:.4f}",
@@ -446,12 +540,10 @@ def mostrar_controle(tab):
                 f"{m_zn['y_final']:.4f}",
             ],
         }
+        st.dataframe(pd.DataFrame(dados_tabela), width='stretch', hide_index=True)
 
-        st.dataframe(pd.DataFrame(dados_tabela), width="stretch", hide_index=True)
-
-        # Comentários e análise comparativa das diferenças
+        # Análise Comparativa e Fundamentação Teórica das 4 Abas
         st.markdown("### Análise Comparativa e Fundamentação Teórica")
-
         aba_subida, aba_acomod, aba_erro, aba_metodos = st.tabs([
             "1. Tempo de Subida (tr)",
             "2. Tempo de Acomodação (ts)",
@@ -468,7 +560,7 @@ def mostrar_controle(tab):
                   - **Malha Fechada ({nome_curto_sel}):** `{m_mf['tr']:.2f} s` (uma redução de **{abs(delta_tr):.1f}%** na duração de subida).
                 
                 - **Por que a diferença ocorre?**
-                  1. **Na Malha Aberta (MA):** A dinâmica do sistema é puramente passiva. A velocidade de elevação térmica é regida exclusivamente pela constante de tempo do processo ($\tau = {tau_val:.2f}\\text{{ s}}$) e pelo atraso de transporte ($\theta = {theta_val:.2f}\\text{{ s}}$). A planta reage apenas na medida em que a energia térmica se propaga naturalmente pelas resistências e paredes do forno.
+                  1. **Na Malha Aberta (MA):** A dinâmica do sistema é puramente passiva. A velocidade de elevação térmica é regida exclusivamente pela constante de tempo do processo ($\tau = {tau_val:.2f}\\text{{ s}}$) e pelo atraso de transporte ($\theta = {theta_val:.2f}\\text{{ s}}$). A planta reage apenas na medida em que a energia térmica se propaga naturalmente pelo processo.
                   2. **Na Malha Fechada (MF):** No instante em que o degrau de referência é aplicado ($t = 0^+$), o erro instantâneo é máximo ($e(t) = r - y = {sp_val:.2f}$). Como a ação de controle proporcional é $u(t) \\approx K_p \\cdot e(t)$, o controlador injeta uma potência inicial muito superior à potência de regime permanente, "forçando" o sistema a subir vertiginosamente. Adicionalmente, quando em modo PID, a ação derivativa ($T_d$) antecipa variações bruscas, conferindo maior agilidade inicial à resposta.
                 """
             )
@@ -482,7 +574,7 @@ def mostrar_controle(tab):
                   - **Malha Fechada ({nome_curto_sel}):** `{m_mf['ts']:.2f} s` (variação de **{delta_ts:.1f}%**).
                 
                 - **Por que a diferença ocorre?**
-                  1. **Na Malha Aberta (MA):** A resposta converge de forma estritamente assintótica de acordo com o polo natural do sistema $s = -1/\\tau$. A teoria clássica estabelece que uma planta de primeira ordem requer entre $3.9\\tau + \\theta$ e $4\\tau + \\theta$ para alcançar a faixa de 2% (no caso deste forno: aproximadamente ${3.9 * tau_val + theta_val:.1f}\\text{{ s}}$). Não há como acelerar essa acomodação sem controle ativo.
+                  1. **Na Malha Aberta (MA):** A resposta converge de forma estritamente assintótica de acordo com o polo natural do sistema $s = -1/\\tau$. A teoria clássica estabelece que uma planta de primeira ordem requer entre $3.9\\tau + \\theta$ e $4\\tau + \\theta$ para alcançar a faixa de 2% (no caso desta planta: aproximadamente ${3.9 * tau_val + theta_val:.1f}\\text{{ s}}$). Não há como acelerar essa acomodação sem controle ativo.
                   2. **Na Malha Fechada (MF):** A realimentação realoca os polos em malha fechada no plano complexo $s$. O método **ITAE com foco em menor overshoot** foi formulado especificamente para minimizar o critério integral $\\int_0^\\infty t |e(t)| \\, dt$, no qual desvios temporais tardios são severamente penalizados. Dessa forma, o controlador amortece as oscilações e estabiliza a variável de processo firmemente dentro da faixa de $\\pm 2\\%$, evitando ciclos térmicos prolongados que degradariam a precisão da operação.
                 """
             )
@@ -496,10 +588,10 @@ def mostrar_controle(tab):
                   - **Malha Fechada ({nome_curto_sel}):** `{m_mf['ess']:.4f}` (**{m_mf['ess_pct']:.2f}%** de erro — rigorosamente nulo).
                 
                 - **Por que a diferença ocorre?**
-                  1. **Na Malha Aberta (MA):** O sistema não mede a variável de saída para corrigir o sinal de controle. Como o ganho estático da planta é $K = {k_val:.4f} \\neq 1$, para uma entrada degrau $r(t) = {sp_val:.2f}$, a saída estabiliza apenas em $y(\\infty) = K \\cdot r = {k_val * sp_val:.4f}$. Isso acarreta um **erro persistente e inaceitável de mais de {(1 - k_val) * 100:.1f}%**. Além disso, perdas de calor para o ambiente ou variações na tensão de alimentação não podem ser compensadas em malha aberta.
+                  1. **Na Malha Aberta (MA):** O sistema não mede a variável de saída para corrigir o sinal de controle. Como o ganho estático da planta é $K = {k_val:.4f} \\neq 1$, para uma entrada degrau $r(t) = {sp_val:.2f}$, a saída estabiliza apenas em $y(\\infty) = K \\cdot r = {k_val * sp_val:.4f}$. Isso acarreta um **erro persistente e inaceitável de mais de {(1 - k_val) * 100:.1f}%**. Além disso, distúrbios externos não podem ser compensados em malha aberta.
                   2. **Na Malha Fechada (MF):** A presença da **ação integral (termo I)** no controlador ($1 / T_i s$) acumula todo o histórico de erro ao longo do tempo:
                      $$\\int_0^t e(\\sigma) \\, d\\sigma$$
-                     Enquanto a temperatura do forno diferir do Setpoint ($e(t) \\neq 0$), a integral continua acumulando e elevando a tensão de controle no atuador. A única condição de equilíbrio estacionário é quando o erro é estritamente zero ($e(t) \\to 0$, $y(\\infty) = r$). Isso garante erro nulo de processo, rejeição a distúrbios térmicos e perfeita conformidade com a receita de temperatura.
+                     Enquanto a variável diferir do Setpoint ($e(t) \\neq 0$), a integral continua acumulando e elevando a tensão de controle no atuador. A única condição de equilíbrio estacionário é quando o erro é estritamente zero ($e(t) \\to 0$, $y(\\infty) = r$). Isso garante erro nulo de processo, rejeição a distúrbios e conformidade estrita com o setpoint programado.
                 """
             )
 
@@ -517,7 +609,7 @@ def mostrar_controle(tab):
 
                 #### 1. Qual método apresenta menores índices de sobressinal?
                 O método **ITAE (Integral do Erro Absoluto Ponderado pelo Tempo)** apresenta os menores índices de sobressinal.
-                - **ITAE:** obteve **{mp_itae:.2f}%** de sobressinal (praticamente nulo / transição monotonicamente suave).
+                - **ITAE:** obteve **{mp_itae:.2f}%** de sobressinal (praticamente nulo / transição suave).
                 - **Ziegler-Nichols:** obteve **{mp_zn:.2f}%** de sobressinal (pico expressivo acima do setpoint).
                 """
             )
@@ -535,19 +627,18 @@ def mostrar_controle(tab):
                   $$J_{\text{ITAE}} = \int_0^\infty t \cdot |e(t)| \, dt$$
                 - O fator $t$ atua como uma **penalidade ponderada pelo tempo**: erros que ocorrem logo após a aplicação do degrau ($t \approx 0$) são tolerados para permitir uma elevação rápida, mas qualquer oscilação, resíduo ou sobressinal após a fase de subida recebe uma **penalização severa**.
                 - Para minimizar essa integral, o algoritmo força o sistema a convergir de forma altamente amortecida, evitando que a resposta ultrapasse o setpoint.
-                - Em contraste, a formulação de **Ziegler-Nichols** foi concebida heuristicamente em 1942 visando uma razão de amortecimento de um quarto (*quarter decay ratio*), que tolera deliberadamente sobressinais elevados (entre 15% e 25%) em troca de agressividade no ganho inicial ($K_p$ alto e $T_i$ curto).
+                - Em contraste, a formulação de **Ziegler-Nichols** foi concebida heuristicamente visando uma razão de amortecimento de um quarto (*quarter decay ratio*), que tolera deliberadamente sobressinais elevados (entre 15% e 25%) em troca de agressividade no ganho inicial ($K_p$ alto e $T_i$ curto).
 
                 ##### B) Alocação Ótima de Polos e Fator de Amortecimento ($\zeta$)
                 - A sintonia ITAE calcula um balanço ótimo entre ganho proporcional e tempo integral, posicionando os polos dominantes de malha fechada com fator de amortecimento $\zeta \ge 0.707$ (próximo ao amortecimento crítico).
                 - Isso elimina a ressonância do laço e impede o overshoot, enquanto Ziegler-Nichols posiciona os polos com baixo amortecimento ($\zeta \approx 0.25$ a $0.35$), provocando respostas oscilatórias.
 
-                ##### C) Adequação Físico-Operacional à Planta Térmica (Forno G1)
-                Em processos térmicos como este forno, o comportamento sem sobressinal do ITAE é decisivo:
-                1. **Proteção contra Choque Térmico e Degradação:** Sobrelevação térmica provoca sobretensão e estresse térmico desnecessário nos elementos resistivos e no revestimento refratário do forno.
-                2. **Preservação da Carga/Produto:** Em processos industriais reais (tratamento térmico, secagem, cocção ou reações químicas), ultrapassar a temperatura programada pode comprometer a integridade e qualidade do material.
-                3. **Dinâmica Assimétrica de Resfriamento:** Fornos elétricos aquecem ativamente via efeito Joule, mas resfriam apenas de forma passiva por dissipação ambiental. Quando ocorre um sobressinal expressivo (como no Ziegler-Nichols), o sistema demora um tempo desproporcionalmente longo para resfriar de volta ao Setpoint, degradando a eficiência operacional.
+                ##### C) Adequação Físico-Operacional à Planta
+                Em processos reais (como fornos industriais), o comportamento sem sobressinal do ITAE é decisivo:
+                1. **Proteção contra Choque Térmico e Degradação:** Sobrelevações térmicas provocam estresse nos elementos resistivos e materiais.
+                2. **Preservação da Carga/Produto:** Ultrapassar a temperatura programada pode comprometer a integridade e qualidade do produto.
+                3. **Dinâmica Assimétrica de Resfriamento:** Fornos aquecem ativamente, mas resfriam apenas por dissipação passiva. Quando ocorre um sobressinal expressivo, o sistema demora um tempo desproporcionalmente longo para retornar ao Setpoint.
 
-                > **Conclusão:** O método **ITAE** é tecnicamente o mais indicado e entrega resultados superiores por combinar **rápida elevação, erro estacionário estritamente nulo e ausência de sobreaquecimento**.
+                > **Conclusão:** O método **ITAE** é tecnicamente o mais indicado por combinar **rápida elevação, erro estacionário estritamente nulo e ausência de sobreaquecimento**.
                 """
             )
-
