@@ -63,7 +63,7 @@ Assim, o sistema pode ser resumido da seguinte forma:
 
 ## 3. Comparação e ajuste fino do modelo
 
-Após a identificação da planta pelos métodos de Smith e Sundaresan, o sistema permite comparar a resposta experimental com a resposta obtida pelo modelo FOPDT identificado.
+Após a identificação da planta pelos métodos de Smith e Sundaresan, foi selecionado o método de **Sundaresan**, que apresentou melhor aproximação para os dados analisados.
 
 O modelo considerado é:
 
@@ -99,7 +99,7 @@ $$
 
 onde $y_i$ corresponde ao valor experimental e $\hat{y}_i$ ao valor estimado pelo modelo.
 
-Como métrica principal, é utilizado o **RMSE** (*Root Mean Squared Error*):
+Como principal métrica de comparação é utilizado o **RMSE** (*Root Mean Squared Error*):
 
 $$
 RMSE=
@@ -110,53 +110,119 @@ RMSE=
 }
 $$
 
-Também é apresentado o erro absoluto máximo observado durante o experimento:
+Também é calculado o erro absoluto máximo:
 
 $$
 E_{\max}=
 \max |y_i-\hat{y}_i|
 $$
 
-Para facilitar a interpretação do RMSE, ele é comparado com a amplitude total da resposta:
+Para facilitar a interpretação do resultado, o RMSE também é relacionado à amplitude total da resposta:
 
 $$
-A=y_{\max}-y_{\min}
+A = y_{\max} - y_{\min}
 $$
 
-e:
+O RMSE relativo, em porcentagem, é calculado por:
 
 $$
-RMSE_{\%}=
-\frac{RMSE}{A}\times100
+\frac{RMSE}{A} \times 100
 $$
 
-Como critério auxiliar utilizado na interface:
+Na interface foi adotado o seguinte critério auxiliar:
 
-- **RMSE relativo de até 5%:** aproximação considerada satisfatória;
-- **entre 5% e 10%:** aproximação razoável, com possibilidade de melhoria;
-- **acima de 10%:** recomenda-se avaliar um ajuste fino dos parâmetros.
+- **até 5%:** aproximação satisfatória;
+- **entre 5% e 10%:** aproximação razoável, podendo ser melhorada;
+- **acima de 10%:** recomenda-se realizar o ajuste fino.
 
-> Esses limites são utilizados apenas como referência prática para auxiliar a análise e não representam um critério universal de identificação de sistemas.
+Esses valores são utilizados apenas como referência para auxiliar a análise da resposta.
 
----
+### Comparação do modelo identificado
+
+Para o método de **Sundaresan**, os parâmetros inicialmente identificados foram:
+
+- $K = 0{,}6750$
+- $\tau = 121{,}2030$ s
+- $\theta = 23{,}7940$ s
+
+Na etapa de comparação, o modelo apresentou:
+
+- **RMSE:** 0,7548 °C
+- **Erro máximo:** 2,4891 °C
+- **RMSE em relação à amplitude:** 2,09%
+
+Como o RMSE corresponde a apenas 2,09% da amplitude da resposta, a aproximação inicial já pode ser considerada satisfatória pelo critério adotado.
+
+Mesmo assim, foi realizado um ajuste fino para verificar se seria possível melhorar a aproximação entre o modelo e os dados experimentais.
 
 ### Ajuste fino manual
 
-A interface permite modificar individualmente os parâmetros $K$, $\tau$ e $\theta$ por meio de controles deslizantes.
+A interface permite modificar individualmente os parâmetros $K$, $\tau$ e $\theta$ para observar o efeito de cada alteração sobre a resposta do sistema.
 
-O efeito esperado de cada parâmetro é:
+O efeito de cada parâmetro pode ser observado da seguinte forma:
 
 - aumento de **K** → aumenta o valor final da resposta;
 - redução de **K** → reduz o valor final da resposta;
 - aumento de **τ** → torna a resposta mais lenta;
 - redução de **τ** → torna a resposta mais rápida;
-- aumento de **θ** → aumenta o atraso para o início da resposta;
-- redução de **θ** → faz com que a resposta comece mais cedo.
+- aumento de **θ** → aumenta o atraso no início da resposta;
+- redução de **θ** → faz a resposta começar mais cedo.
 
-A curva estimada é recalculada após cada alteração, permitindo observar diretamente o reflexo dos parâmetros sobre a resposta do sistema.
-
----
+A cada alteração, a curva é recalculada e comparada novamente com os dados experimentais.
 
 ### Ajuste automático
 
-Além do ajuste manual, foi implementado um ajuste automático utilizando a função `
+Também foi implementado um ajuste automático utilizando a função `least_squares` da biblioteca SciPy.
+
+O algoritmo procura novos valores de $K$, $\tau$ e $\theta$ que reduzam a diferença entre a resposta experimental e a resposta calculada pelo modelo.
+
+Para cada amostra, o resíduo é calculado por:
+
+$$
+r_i=\hat{y}_i-y_i
+$$
+
+O método busca minimizar a soma dos quadrados desses resíduos:
+
+$$
+J(K,\tau,\theta)=
+\sum_{i=1}^{n}
+(\hat{y}_i-y_i)^2
+$$
+
+Após o ajuste automático, foram obtidos os seguintes parâmetros:
+
+- $K = 0{,}66037$
+- $\tau = 120{,}483$ s
+- $\theta = 20{,}863$ s
+
+O RMSE foi reduzido de:
+
+$$
+RMSE_{\text{identificado}} = 0{,}7548\ ^\circ C
+$$
+
+para:
+
+$$
+RMSE_{\text{ajustado}} = 0{,}5518\ ^\circ C
+$$
+
+A redução percentual foi de aproximadamente:
+
+$$
+\text{Redução}=
+\frac{
+0{,}7548-0{,}5518
+}{
+0{,}7548
+}
+\times100
+\approx 26{,}90\%
+$$
+
+Após o ajuste, o RMSE passou a representar aproximadamente **1,53% da amplitude da resposta**, enquanto o nível de ruído estimado foi de **0,4299 °C**.
+
+O ajuste modificou principalmente o ganho e o tempo morto do modelo. O ganho foi reduzido de 0,6750 para 0,66037, diminuindo levemente a amplitude final da resposta. A constante de tempo apresentou uma pequena redução, de 121,2030 s para 120,483 s, tornando a resposta ligeiramente mais rápida. Já o tempo morto foi reduzido de 23,7940 s para 20,863 s, fazendo com que a resposta estimada começasse mais cedo.
+
+Assim, apesar de o modelo inicialmente identificado já apresentar uma aproximação satisfatória, o ajuste fino automático conseguiu melhorar a representação da resposta experimental, reduzindo o RMSE em aproximadamente **26,90%**.
