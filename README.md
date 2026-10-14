@@ -1,6 +1,6 @@
 # Parte Teórica
 
-## 1. Funcionamento da planta
+## Funcionamento da planta
 
 A planta é um **forno**, em que o objetivo é controlar a temperatura de acordo com um valor de referência definido pelo usuário. No projeto, essa referência é representada por **SP(s)**, enquanto a saída do processo é representada por **PV(s)**.
 
@@ -20,7 +20,7 @@ De forma simplificada, o funcionamento seria:
 
 ---
 
-## 2. Variáveis do sistema
+## Variáveis do sistema
 
 A **variável controlada** é a temperatura do forno, já que essa é a grandeza que se deseja manter próxima do valor de referência. No sistema em malha fechada, essa temperatura medida é comparada com o SetPoint para gerar o erro utilizado pelo controlador.
 
@@ -61,7 +61,7 @@ Assim, o sistema pode ser resumido da seguinte forma:
 
 # Parte Prática
 
-## 3. Comparação e ajuste fino do modelo
+## Comparação e ajuste fino do modelo
 
 Após a identificação da planta pelos métodos de Smith e Sundaresan, foi selecionado o método de **Sundaresan**, que apresentou melhor aproximação para os dados analisados.
 
@@ -226,3 +226,42 @@ Após o ajuste, o RMSE passou a representar aproximadamente **1,53% da amplitude
 O ajuste modificou principalmente o ganho e o tempo morto do modelo. O ganho foi reduzido de 0,6750 para 0,66037, diminuindo levemente a amplitude final da resposta. A constante de tempo apresentou uma pequena redução, de 121,2030 s para 120,483 s, tornando a resposta ligeiramente mais rápida. Já o tempo morto foi reduzido de 23,7940 s para 20,863 s, fazendo com que a resposta estimada começasse mais cedo.
 
 Assim, apesar de o modelo inicialmente identificado já apresentar uma aproximação satisfatória, o ajuste fino automático conseguiu melhorar a representação da resposta experimental, reduzindo o RMSE em aproximadamente **26,90%**.
+
+## Estrutura e funcionamento das abas desenvolvidas
+
+A aplicação foi estruturada de forma modular em abas interativas, permitindo navegar desde a autenticação e inspeção dos dados experimentais até a modelagem matemática e simulação do controle em malha fechada.
+
+### Aba Início
+A aba Início é responsável pelo controle de autenticação e gerenciamento de acesso aos recursos da aplicação:
+- Autenticação de usuários por meio de credenciais padrão (`admin`/`admin`).
+- Persistência do estado da sessão (`st.session_state`), mantendo as variáveis e o fluxo entre as abas.
+- Bloqueio das funcionalidades de identificação, dados e controle enquanto o usuário não realizar o login.
+- Botão para encerramento da sessão (logout) e redefinição dos dados armazenados em memória.
+
+### Aba Identificação
+A aba Identificação realiza a modelagem paramétrica da planta térmica a partir dos dados do ensaio experimental:
+- Leitura e carregamento de arquivos de ensaio nos formatos `.mat`, `.csv` e `.txt`.
+- Pré-processamento dos sinais experimentais com remoção do offset térmico inicial pela média das primeiras amostras em repouso, referenciando o sistema ao ponto de operação.
+- Identificação dos parâmetros da função de transferência de Primeira Ordem com Tempo Morto (FOPDT): ganho estático ($K$), constante de tempo ($\tau$) e tempo morto ($\theta$).
+- Implementação de dois métodos clássicos de identificação baseados na curva de reação ao degrau: Smith e Sundaresan.
+- Simulação do modelo estimado em malha aberta com aproximação de Padé de 1ª ordem para o atraso de transporte.
+- Avaliação comparativa entre os modelos através do Erro Quadrático Médio (EQM/RMSE) em relação à curva experimental.
+- Exibição da função de transferência $G(s)$, apresentação do gráfico comparativo da resposta temporal e armazenamento do modelo na sessão para utilização na aba de controle.
+
+### Aba Dados
+A aba Dados fornece uma visão direzta da estrutura e da distribuição das grandezas contidas no arquivo de ensaio:
+- Leitura de arquivos `.mat`, `.csv` ou `.txt` com extração dos vetores numéricos unidimensionais.
+- Listagem de todas as variáveis e colunas encontradas no arquivo, informando o tipo de dado e quantidade de amostras.
+- Cálculo de estatísticas descritivas para cada variável (valores mínimo, máximo e média).
+- Identificação da variável correspondente à saída do processo (temperatura do forno / PV).
+- Apresentação dos dados de saída em tabela indexada para visualização direta dos pontos experimentais.
+
+### Aba Controle PID
+A aba Controle PID executa o projeto e a simulação do sistema em malha fechada com realimentação unitária:
+- Seleção entre dois modos de operação para a definição dos parâmetros do controlador:
+  - Sintonia analítica: determinação automática dos ganhos a partir dos parâmetros FOPDT identificados, com suporte aos métodos de Ziegler-Nichols (curva de reação) e ITAE (seguimento de SetPoint), tanto para estruturas PI quanto PID.
+  - Sintonia manual: ajuste interativo e direto dos parâmetros $K_p$, $T_i$ e $T_d$ pelo usuário.
+- O parâmetro $\lambda$ (IMC) permanece fixo e bloqueado no valor 0.0, indicando a não utilização de métodos baseados em IMC no projeto.
+- Simulação temporal da malha aberta e da malha fechada sob degrau de referência (SetPoint), considerando o atraso de transporte puro e filtro derivativo ($N=10$).
+- Cálculo e exibição das métricas de desempenho transitório e permanente: tempo de subida ($t_r$), tempo de acomodação ($t_s$), sobressinal percentual ($\%OS$) e erro em regime permanente ($e_{ss}$).
+- Tabela comparativa de desempenho entre os métodos e apresentação das equações matemáticas do controlador no domínio de Laplace e no domínio do tempo.
