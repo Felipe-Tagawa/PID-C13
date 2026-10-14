@@ -249,7 +249,7 @@ A aba Identificação realiza a modelagem paramétrica da planta térmica a part
 - Exibição da função de transferência $G(s)$, apresentação do gráfico comparativo da resposta temporal e armazenamento do modelo na sessão para utilização na aba de controle.
 
 ### Aba Dados
-A aba Dados fornece uma visão direzta da estrutura e da distribuição das grandezas contidas no arquivo de ensaio:
+A aba Dados fornece uma visão direta da estrutura e da distribuição das grandezas contidas no arquivo de ensaio:
 - Leitura de arquivos `.mat`, `.csv` ou `.txt` com extração dos vetores numéricos unidimensionais.
 - Listagem de todas as variáveis e colunas encontradas no arquivo, informando o tipo de dado e quantidade de amostras.
 - Cálculo de estatísticas descritivas para cada variável (valores mínimo, máximo e média).
